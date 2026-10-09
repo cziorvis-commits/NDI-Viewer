@@ -1,0 +1,4 @@
+.derived/
+build/
+NDIViewer.xcodeproj/
+.DS_Store

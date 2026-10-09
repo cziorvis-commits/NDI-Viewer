@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0c0e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>NDI-Viewer</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header class="bar">
+    <button id="scopeBtn" class="scope" aria-haspopup="menu">
+      <span class="scope-kind" id="scopeKind">Live</span>
+      <span class="scope-name" id="scopeName">All sources</span>
+      <i data-icon="chevron"></i>
+    </button>
+    <label class="search">
+      <i data-icon="search"></i>
+      <input id="search" type="search" placeholder="Search name, host or IP" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="actions">
+      <button id="saveStageBtn" class="ib" title="Save stage snapshot" aria-label="Save stage snapshot"><i data-icon="camera"></i></button>
+      <button id="editBtn" class="ib" title="Edit layout" aria-label="Edit layout"><i data-icon="edit"></i></button>
+      <button id="layoutBtn" class="ib" title="Layouts" aria-label="Layouts"><i data-icon="layout"></i></button>
+      <button id="browserBtn" class="ib host-only" title="Open in browser window" aria-label="Open in browser window"><i data-icon="open"></i></button>
+      <span class="local-only sep"></span>
+      <button id="viewersBtn" class="ib local-only" title="Viewers" aria-label="Viewers"><i data-icon="users"></i><b class="badge" id="viewersBadge" hidden></b></button>
+      <button id="phoneBtn" class="ib local-only" title="Open on phone" aria-label="Open on phone"><i data-icon="phone"></i></button>
+      <button id="settingsBtn" class="ib local-only" title="Settings" aria-label="Settings"><i data-icon="gear"></i></button>
+    </div>
+  </header>
+
+  <div id="editBar" class="editbar" hidden>
+    <div class="editbar-row">
+      <span class="editbar-title"><i data-icon="edit"></i> Editing layout <em id="layoutNameLabel"></em></span>
+      <span class="editbar-hint">Drag to move · drag the corner or use −/+ to resize · × to remove</span>
+      <label class="zoom" title="Base tile size"><i data-icon="grid"></i><input id="zoom" type="range" min="120" max="420" step="10"></label>
+      <button id="editDone" class="btn primary sm">Done</button>
+    </div>
+    <div id="tray" class="tray" hidden></div>
+  </div>
+
+  <main id="galleryWrap">
+    <div id="gallery" class="gallery"></div>
+    <div id="empty" class="empty" hidden></div>
+  </main>
+
+  <footer class="status">
+    <span id="connDot" class="dot"></span>
+    <span id="statusText">Connecting…</span>
+    <span class="grow"></span>
+    <span id="statusRight"></span>
+  </footer>
+
+  <section id="viewer" class="viewer" hidden>
+    <div class="v-stage">
+      <canvas id="vCanvas"></canvas>
+      <div id="vMsg" class="v-msg">Connecting…</div>
+      <div id="vMeters" class="v-meters"></div>
+      <div id="vStats" class="v-stats"></div>
+      <div id="vBanner" class="v-banner" hidden></div>
+    </div>
+    <div class="v-top">
+      <button id="vBack" class="ib" title="Back to gallery (Esc)" aria-label="Back"><i data-icon="back"></i></button>
+      <div class="v-title"><div id="vName"></div><div id="vMeta"></div></div>
+      <button id="vAudio" class="ib" title="Audio" aria-label="Audio"><i data-icon="mute"></i></button>
+      <button id="vStatsBtn" class="ib on" title="Stats" aria-label="Stats"><i data-icon="stats"></i></button>
+      <button id="vDetach" class="ib host-only" title="Open in separate window" aria-label="Open in separate window"><i data-icon="detach"></i></button>
+      <button id="vFs" class="ib browser-only" title="Fullscreen" aria-label="Fullscreen"><i data-icon="expand"></i></button>
+    </div>
+  </section>
+
+  <div id="hold" class="hold" hidden>
+    <div class="hold-card">
+      <i data-icon="pause" class="hold-icon"></i>
+      <h2 id="holdTitle">On hold</h2>
+      <p id="holdText"></p>
+      <button class="btn primary" id="holdResume">Tap to resume</button>
+    </div>
+  </div>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <div id="sheet" class="sheet" hidden role="dialog" aria-modal="true"></div>
+  <div id="menu" class="menu" hidden role="menu"></div>
+  <div id="toast" class="toast" hidden></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
