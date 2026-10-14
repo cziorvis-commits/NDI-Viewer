@@ -201,6 +201,7 @@ body.editing .tile .q { display: none; }
 .empty { display: grid; place-items: center; text-align: center; color: var(--dim); padding: 48px 16px; }
 .empty h3 { margin: 10px 0 4px; color: var(--text); font-size: 15px; }
 .empty p { margin: 0; max-width: 360px; }
+.empty .btn { margin-top: 14px; }
 .spinner {
   width: 22px; height: 22px; border-radius: 50%; margin: 0 auto;
   border: 2px solid var(--line-2); border-top-color: var(--live); animation: spin 1s linear infinite;
@@ -315,6 +316,10 @@ textarea.input { height: 64px; padding: 8px 10px; resize: vertical; font-family:
 .pill.hidden { background: var(--panel-3); color: var(--faint); }
 .pill.local { background: rgba(106,165,255,.14); color: var(--accent); }
 .muted { color: var(--faint); }
+
+.scan-progress { height: 4px; border-radius: 2px; background: var(--panel-3); overflow: hidden; }
+.scan-progress > div { height: 100%; background: var(--accent); transition: width .25s ease; }
+.scan-progress.running > div { background: var(--live); }
 
 .phone { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; }
 .phone img { width: 156px; height: 156px; border-radius: 8px; background: #fff; padding: 8px; image-rendering: pixelated; }

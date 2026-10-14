@@ -19,6 +19,9 @@ final class ViewerServer {
     private var webRoot: URL?
     private var qrCache: (String, Data)?
     private var viewersDirty = false
+    private var scanner: NetworkScanner?
+    private var scannedIPs: [String] = []
+    private var lastScan: [String: Any]?
 
     /// Called on the main thread: (active viewers, remote viewers watching).
     var onPresenceChange: ((Int, Int) -> Void)?
@@ -123,6 +126,7 @@ final class ViewerServer {
         ws.sendJSON(welcome)
         ws.sendJSON(["t": "sources", "list": finder.sources.map(\.json)])
         ws.sendJSON(profilesMessage())
+        if s.isLocal, let lastScan { ws.sendJSON(lastScan) }
         updatePresence()
     }
 
@@ -227,6 +231,12 @@ final class ViewerServer {
         case "settings" where s.isLocal:
             if let values = m["values"] as? [String: Any] { AppSettings.shared.merge(json: values) }
 
+        case "scan" where s.isLocal:
+            startScan(spec: (m["ranges"] as? String) ?? "", from: s)
+
+        case "cancelScan" where s.isLocal:
+            scanner?.cancel()
+
         default:
             break
         }
@@ -314,12 +324,57 @@ final class ViewerServer {
         guard active > 0 else { return }
         var ips = AppSettings.shared.values.extraIPs
             .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" }).map(String.init)
+        ips += scannedIPs
         for s in sessions.values where s.isActive {
             if let id = s.viewingProfile, let p = profiles.profile(id) { ips += p.ips }
         }
         var seen = Set<String>()
         let joined = ips.filter { !$0.isEmpty && seen.insert($0).inserted }.joined(separator: ",")
         finder.start(extraIPs: joined)
+    }
+
+    // MARK: Network scan
+
+    /// Probes the local subnets plus `spec` for NDI hosts. Hosts found are added to discovery until the app quits.
+    private func startScan(spec: String, from s: ClientSession) {
+        guard scanner == nil else { return }
+        let (hosts, invalid) = NetworkScanner.targets(spec: spec)
+        if !invalid.isEmpty {
+            s.ws.sendJSON(["t": "toast", "text": "Skipped unrecognized range: \(invalid.joined(separator: ", "))"])
+        }
+        guard !hosts.isEmpty else {
+            broadcastScan(["state": "done", "done": 0, "total": 0, "found": [String]()])
+            return
+        }
+        let scanner = NetworkScanner()
+        self.scanner = scanner
+        broadcastScan(["state": "running", "done": 0, "total": hosts.count, "found": [String]()])
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var lastSent = Date.distantPast
+            var checked = 0
+            let found = scanner.run(hosts) { p in
+                checked = p.done
+                guard Date().timeIntervalSince(lastSent) > 0.25 else { return }
+                lastSent = Date()
+                self?.queue.async {
+                    self?.broadcastScan(["state": "running", "done": p.done, "total": p.total, "found": p.found])
+                }
+            }
+            self?.queue.async {
+                guard let self else { return }
+                self.scanner = nil
+                for ip in found where !self.scannedIPs.contains(ip) { self.scannedIPs.append(ip) }
+                self.broadcastScan(["state": "done", "done": checked, "total": hosts.count, "found": found])
+                self.refreshFinder()
+            }
+        }
+    }
+
+    private func broadcastScan(_ state: [String: Any]) {
+        var msg = state
+        msg["t"] = "scan"
+        lastScan = msg
+        for s in sessions.values where s.isLocal { s.ws.sendJSON(msg) }
     }
 
     private func settingsChanged() {

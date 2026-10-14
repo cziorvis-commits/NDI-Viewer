@@ -55,6 +55,7 @@ const ICON_PATHS = {
   copy: '<rect x="8" y="8" width="12" height="12" rx="1.8"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   open: '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>',
+  radar: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12 18 6"/>',
 };
 function icon(name) {
   const i = document.createElement('i');
@@ -103,6 +104,7 @@ const S = {
   lastSubsKey: '',
   bytes: 0, frames: 0, rate: { bytes: 0, fps: 0 },
   sheet: null,
+  scan: null,                // last {state, done, total, found} from the host
 };
 const tiles = new Map();     // name -> {el, canvas, snap, lastFrame, ...}
 
@@ -166,6 +168,7 @@ function onJSON(m) {
       S.sources = new Map(m.list.map(s => [s.name, s]));
       S.everDiscovered = S.everDiscovered || m.list.length > 0;
       render();
+      if (S.sheet === 'scan') renderScanStatus();
       break;
     case 'profiles':
       S.profiles = m.list;
@@ -198,6 +201,11 @@ function onJSON(m) {
       break;
     case 'settings': S.settings = m.values; break;
     case 'toast': toast(m.text); break;
+    case 'scan':
+      S.scan = m;
+      if (S.sheet === 'scan') renderScanStatus();
+      else if (m.state === 'done' && m.total) toast(`Scan finished: ${m.found.length} NDI host${m.found.length === 1 ? '' : 's'} found`);
+      break;
   }
 }
 
@@ -449,7 +457,9 @@ function renderEmpty(shown, total) {
   else if (total > 0) { title = 'All tiles removed'; text = 'Turn on Edit layout to bring sources back.'; }
   else if (p) { title = 'This stage has no sources'; text = 'Use “Update from live” in the stage menu to capture the current sources.'; }
   else { title = 'Looking for NDI sources…'; text = 'Sources on this network appear here automatically. Add discovery IPs in Settings for other subnets.'; spin = true; }
-  empty.append(el('div', {}, spin ? el('div', { class: 'spinner' }) : null, el('h3', { text: title }), el('p', { text })));
+  const scanBtn = !p && S.connected && S.local && !S.search && total === 0
+    ? el('button', { class: 'btn sm', icon: 'radar', onclick: openScanSheet }, 'Scan network') : null;
+  empty.append(el('div', {}, spin ? el('div', { class: 'spinner' }) : null, el('h3', { text: title }), el('p', { text }), scanBtn));
 }
 
 function renderTray(removed) {
@@ -1118,6 +1128,7 @@ $('#settingsBtn').addEventListener('click', () => {
     el('div', { class: 'section-title', text: 'Discovery' }),
     el('label', { class: 'field' }, el('span', { text: 'Extra discovery IPs' }), ips,
       el('small', { text: 'For sources on other subnets. Saved stages add their own source IPs automatically while open.' })),
+    el('button', { class: 'btn sm', icon: 'radar', onclick: openScanSheet }, 'Scan network…'),
     el('div', { class: 'section-title', text: 'App' }),
     el('div', { class: 'row2' },
       el('label', { class: 'field' }, el('span', { text: 'Popover size' }), sizeSel),
@@ -1131,6 +1142,79 @@ $('#settingsBtn').addEventListener('click', () => {
   } });
   openSheet('settings', 'Settings', body, [el('button', { class: 'btn', text: 'Cancel', onclick: closeSheet }), save]);
 });
+
+/* ---------- network scan ---------- */
+const SCAN_KEY = 'ndiviewer.scanRanges';
+function openScanSheet() {
+  let saved = '';
+  try { saved = localStorage.getItem(SCAN_KEY) || ''; } catch (e) {}
+  const ranges = el('input', { class: 'input', value: saved, placeholder: '10.0.5.0/24, 192.168.20.10-80', spellcheck: 'false', autocomplete: 'off' });
+  const start = () => {
+    try { localStorage.setItem(SCAN_KEY, ranges.value.trim()); } catch (e) {}
+    send({ t: 'scan', ranges: ranges.value });
+  };
+  ranges.addEventListener('keydown', e => { if (e.key === 'Enter' && !(S.scan && S.scan.state === 'running')) start(); });
+  const body = el('div', {},
+    el('p', { class: 'muted', style: 'margin:0 0 12px', text: 'Checks every address on this Mac’s networks for NDI (TCP port 5960). Hosts found are added to discovery, which also finds sources on networks that block mDNS.' }),
+    el('label', { class: 'field' }, el('span', { text: 'Also scan' }), ranges,
+      el('small', { text: 'Optional. Subnets or ranges on other networks: 10.0.5.0/24, 10.0.5.10-80. A single address scans its /24.' })),
+    el('div', { id: 'scanStatus' }));
+  const action = el('button', { class: 'btn primary', id: 'scanAction' });
+  action.addEventListener('click', () => (S.scan && S.scan.state === 'running') ? send({ t: 'cancelScan' }) : start());
+  const saveBtn = el('button', { class: 'btn', id: 'scanSave', text: 'Save to discovery IPs', onclick: saveScanned });
+  openSheet('scan', 'Scan network', body, [saveBtn, action]);
+  renderScanStatus();
+  setTimeout(() => ranges.focus(), 30);
+}
+
+function scannedNotSaved() {
+  const have = new Set((S.settings.extraIPs || '').split(/[\s,]+/).filter(Boolean));
+  return ((S.scan && S.scan.found) || []).filter(ip => !have.has(ip));
+}
+function saveScanned() {
+  const add = scannedNotSaved();
+  if (!add.length) return;
+  const cur = (S.settings.extraIPs || '').trim();
+  const extraIPs = [cur, add.join(', ')].filter(Boolean).join(', ');
+  S.settings = { ...S.settings, extraIPs };
+  send({ t: 'settings', values: { extraIPs } });
+  toast(`Saved ${add.length} IP${add.length === 1 ? '' : 's'} to discovery`);
+  renderScanStatus();
+}
+
+function renderScanStatus() {
+  const box = $('#scanStatus'), action = $('#scanAction'), saveBtn = $('#scanSave');
+  if (!box) return;
+  const sc = S.scan;
+  const running = !!(sc && sc.state === 'running');
+  action.textContent = running ? 'Stop' : sc ? 'Scan again' : 'Scan';
+  action.className = running ? 'btn' : 'btn primary';
+  saveBtn.hidden = running || scannedNotSaved().length === 0;
+  box.innerHTML = '';
+  if (!sc) return;
+  const found = sc.found || [];
+  const pct = sc.total ? Math.round(sc.done / sc.total * 100) : 100;
+  const summary = running ? `Checked ${sc.done} of ${sc.total} addresses · ${found.length} found`
+    : !sc.total ? 'Nothing to scan. Connect to a network or enter a range.'
+    : `${sc.done < sc.total ? 'Stopped after' : 'Checked'} ${sc.done} address${sc.done === 1 ? '' : 'es'} · ${found.length} NDI host${found.length === 1 ? '' : 's'} found`;
+  box.append(el('div', { class: 'section-title', text: 'Results' }),
+    el('div', { class: 'scan-progress' + (running ? ' running' : '') }, el('div', { style: `width:${pct}%` })),
+    el('p', { class: 'muted', style: 'margin:6px 0 10px;font-size:12px', text: summary }));
+  if (!found.length) return;
+  const all = [...S.sources.values()];
+  const list = el('div', { class: 'vlist' });
+  for (const ip of found) {
+    const srcs = all.filter(s => s.ip === ip);
+    list.append(el('div', { class: 'vrow' },
+      el('span', { class: `pill ${srcs.length ? 'active' : 'hidden'}`, text: srcs.length ? `${srcs.length} live` : 'Waiting' }),
+      el('div', { class: 'who' },
+        el('b', { text: srcs.length ? srcs[0].host : 'NDI host' }),
+        el('span', { text: ip }),
+        el('div', { class: 'what', text: srcs.length ? srcs.map(s => s.label).join(' · ') : 'Port open, no sources listed yet' })),
+      el('span')));
+  }
+  box.append(list);
+}
 
 let toastTimer = null;
 function toast(text) {
