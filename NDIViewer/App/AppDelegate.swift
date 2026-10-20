@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     private var viewers: [String: NativeViewerController] = [:]
     private var pageLoaded = false
     private let server = ViewerServer.shared
+    private var lastRemote = 0
 
     private static let popoverSizes: [String: NSSize] = [
         "small": NSSize(width: 640, height: 460),
@@ -50,7 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.toolTip = "NDI-Viewer"
         }
-        server.onPresenceChange = { [weak self] active, remote in self?.updateStatusIcon(active: active, remote: remote) }
+        server.onPresenceChange = { [weak self] active, remote in
+            self?.lastRemote = remote
+            self?.updateStatusIcon()
+        }
+        NotificationCenter.default.addObserver(forName: .recordingsChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.updateStatusIcon()
+        }
 
         configureLoginItemOnFirstRun()
         setupWebView()
@@ -64,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        RecordingManager.shared.stopAll(timeout: 5)
         server.shutdown()
     }
 
@@ -178,6 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         sizeItem.submenu = sizeMenu
         menu.addItem(sizeItem)
 
+        menu.addItem(withTitle: "Open Recordings Folder", action: #selector(openRecordings), keyEquivalent: "").target = self
+
         let login = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
         login.target = self
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -203,6 +213,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         guard let key = item.representedObject as? String else { return }
         AppSettings.shared.update { $0.popoverSize = key }
         applyPopoverSize()
+    }
+    @objc private func openRecordings() {
+        let folder = RecordingManager.folder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folder)
     }
     @objc private func quit() { NSApp.terminate(nil) }
 
@@ -236,11 +251,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         }
     }
 
-    private func updateStatusIcon(active: Int, remote: Int) {
-        let symbol = remote > 0 ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2"
+    private func updateStatusIcon() {
+        let remote = lastRemote
+        let recording = RecordingManager.shared.activeCount
+        let symbol = recording > 0 ? "record.circle" : remote > 0 ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2"
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "NDI-Viewer")
         statusItem.button?.image?.isTemplate = true
-        statusItem.button?.toolTip = remote > 0 ? "NDI-Viewer — \(remote) remote viewer\(remote == 1 ? "" : "s")" : "NDI-Viewer"
+        var tip = ["NDI-Viewer"]
+        if recording > 0 { tip.append("recording \(recording) source\(recording == 1 ? "" : "s")") }
+        if remote > 0 { tip.append("\(remote) remote viewer\(remote == 1 ? "" : "s")") }
+        statusItem.button?.toolTip = tip.joined(separator: " — ")
     }
 
     // MARK: Native viewers

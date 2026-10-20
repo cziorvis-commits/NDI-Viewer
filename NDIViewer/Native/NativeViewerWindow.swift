@@ -16,6 +16,7 @@ final class NativeViewerModel: ObservableObject {
     @Published var showStats = true
     @Published var pinned = false
     @Published var showControls = true
+    @Published var recording = false
 
     init(source: String, ip: String) {
         self.source = source
@@ -171,6 +172,7 @@ struct NativeViewerView: View {
     let videoLayer: CALayer
     let onAudio: (Bool) -> Void
     let onPin: (Bool) -> Void
+    let onRecord: () -> Void
 
     var body: some View {
         ZStack {
@@ -192,6 +194,8 @@ struct NativeViewerView: View {
                     }
                     Spacer()
                     HStack(spacing: 6) {
+                        overlayButton(model.recording ? "stop.circle.fill" : "record.circle", help: model.recording ? "Stop recording" : "Record",
+                                      tint: model.recording ? .red : nil, action: onRecord)
                         overlayButton(model.audioOn ? "speaker.wave.2.fill" : "speaker.slash", help: "Audio") {
                             model.audioOn.toggle(); onAudio(model.audioOn)
                         }
@@ -203,7 +207,7 @@ struct NativeViewerView: View {
                 }
                 .padding(10)
                 .background(LinearGradient(colors: [.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom))
-                .opacity(model.showControls ? 1 : 0)
+                .opacity(model.showControls || model.recording ? 1 : 0)
                 Spacer()
                 HStack(alignment: .bottom) {
                     if model.showStats, let s = model.stats { statsView(s) }
@@ -217,10 +221,12 @@ struct NativeViewerView: View {
         .onHover { inside in withAnimation(.easeOut(duration: 0.2)) { model.showControls = inside } }
     }
 
-    private func overlayButton(_ symbol: String, help: String, active: Bool = false, action: @escaping () -> Void) -> some View {
+    private func overlayButton(_ symbol: String, help: String, active: Bool = false, tint: Color? = nil,
+                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(tint ?? .white)
                 .frame(width: 28, height: 24)
                 .background(active ? Color.white.opacity(0.25) : Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
         }
@@ -268,6 +274,7 @@ final class NativeViewerController: NSObject, NSWindowDelegate {
     var onClose: ((NativeViewerController) -> Void)?
     private var aspectSet = false
     private var statsObserver: Any?
+    private var recordingObserver: Any?
 
     init(source: String, ip: String) {
         self.source = source
@@ -287,7 +294,8 @@ final class NativeViewerController: NSObject, NSWindowDelegate {
         window.delegate = self
         let view = NativeViewerView(model: model, videoLayer: consumer.displayLayer,
                                     onAudio: { [weak self] on in self?.setAudio(on) },
-                                    onPin: { [weak self] on in self?.window.level = on ? .floating : .normal })
+                                    onPin: { [weak self] on in self?.window.level = on ? .floating : .normal },
+                                    onRecord: { RecordingManager.shared.toggle(source) })
         window.contentView = NSHostingView(rootView: view)
         window.setFrameAutosaveName("NDIViewer.native.\(source)")
         if !window.setFrameUsingName("NDIViewer.native.\(source)") { window.center() }
@@ -296,6 +304,11 @@ final class NativeViewerController: NSObject, NSWindowDelegate {
             guard let self, let s, !self.aspectSet, s.width > 0, s.height > 0 else { return }
             self.aspectSet = true
             self.window.contentAspectRatio = NSSize(width: s.width, height: s.height)
+        }
+        model.recording = RecordingManager.shared.isRecording(source)
+        recordingObserver = NotificationCenter.default.addObserver(forName: .recordingsChanged, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.model.recording = RecordingManager.shared.isRecording(self.source)
         }
     }
 
@@ -317,6 +330,7 @@ final class NativeViewerController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let recordingObserver { NotificationCenter.default.removeObserver(recordingObserver) }
         ReceiverHub.shared.remove(consumer)
         consumer.shutdown()
         ViewerServer.shared.nativeViewerClosed()

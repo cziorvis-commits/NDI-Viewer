@@ -16,6 +16,9 @@ struct SettingsValues: Codable, Equatable {
     var extraIPs: String = ""
     var port: Int = 8080
     var popoverSize: String = "medium"
+    var recordHeight: Int = 1080        // output is fitted inside this height, never upscaled
+    var recordBitrateKbps: Int = 5000
+    var recordMic: String = ""          // "" = no audio, "ndi" = the source's own audio, "default" = system default mic, else a device uniqueID
 
     init() {}
 
@@ -34,6 +37,9 @@ struct SettingsValues: Codable, Equatable {
         extraIPs = (try? c.decodeIfPresent(String.self, forKey: .extraIPs)) ?? d.extraIPs
         port = (try? c.decodeIfPresent(Int.self, forKey: .port)) ?? d.port
         popoverSize = (try? c.decodeIfPresent(String.self, forKey: .popoverSize)) ?? d.popoverSize
+        recordHeight = (try? c.decodeIfPresent(Int.self, forKey: .recordHeight)) ?? d.recordHeight
+        recordBitrateKbps = (try? c.decodeIfPresent(Int.self, forKey: .recordBitrateKbps)) ?? d.recordBitrateKbps
+        recordMic = (try? c.decodeIfPresent(String.self, forKey: .recordMic)) ?? d.recordMic
     }
 
     mutating func clamp() {
@@ -47,6 +53,8 @@ struct SettingsValues: Codable, Equatable {
         jpegQuality = min(max(jpegQuality, 0.3), 0.95)
         port = min(max(port, 1024), 65000)
         if !["small", "medium", "large"].contains(popoverSize) { popoverSize = "medium" }
+        recordHeight = min(max(recordHeight, 360), 2160)
+        recordBitrateKbps = min(max(recordBitrateKbps, 500), 100_000)
     }
 }
 

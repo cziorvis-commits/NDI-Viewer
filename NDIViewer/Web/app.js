@@ -55,6 +55,8 @@ const ICON_PATHS = {
   copy: '<rect x="8" y="8" width="12" height="12" rx="1.8"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   open: '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>',
+  rec: '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>',
   radar: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12 18 6"/>',
 };
 function icon(name) {
@@ -105,6 +107,8 @@ const S = {
   bytes: 0, frames: 0, rate: { bytes: 0, fps: 0 },
   sheet: null,
   scan: null,                // last {state, done, total, found} from the host
+  recordings: new Map(),     // source name -> start time (ms), recordings running on the host
+  mics: [],                  // [{id, name}] microphones on the host
 };
 const tiles = new Map();     // name -> {el, canvas, snap, lastFrame, ...}
 
@@ -160,6 +164,7 @@ function onJSON(m) {
     case 'welcome':
       S.id = m.id; S.local = !!m.local; S.urls = m.urls || []; S.port = m.port;
       if (m.settings) S.settings = m.settings;
+      if (m.mics) S.mics = m.mics;
       document.body.classList.toggle('is-local', S.local);
       S.held = null; hideHold();
       if (!m.ndiReady) toast('NDI runtime failed to initialize on the host');
@@ -201,6 +206,14 @@ function onJSON(m) {
       break;
     case 'settings': S.settings = m.values; break;
     case 'toast': toast(m.text); break;
+    case 'recordings':
+      S.recordings = new Map(m.list.map(r => [r.s, r.since]));
+      renderRecording();
+      break;
+    case 'mics':
+      S.mics = m.list;
+      if (S.refreshMics) S.refreshMics();
+      break;
     case 'scan':
       S.scan = m;
       if (S.sheet === 'scan') renderScanStatus();
@@ -405,6 +418,7 @@ function updateTile(t, item) {
   t.meta.textContent = `${item.host || '—'} · ${item.ip || 'no IP'}`;
   t.el.title = item.name;
   t.el.classList.toggle('offline', !item.online);
+  t.el.classList.toggle('rec', S.recordings.has(item.name));
   if (item.snapshot) {
     if (t.snap.getAttribute('src') !== item.snapshot) t.snap.src = item.snapshot;
     if (!item.online || !t.lastFrame) t.el.classList.add('show-snap');
@@ -712,7 +726,27 @@ function renderViewerHeader() {
   $('#vAudio').classList.toggle('on', S.audioOn);
   $('#vStatsBtn').classList.toggle('on', S.statsOn);
   $('#vStats').hidden = !S.statsOn;
+  renderRecording();
 }
+
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const p = n => String(n).padStart(2, '0');
+  return `${s >= 3600 ? Math.floor(s / 3600) + ':' : ''}${p(Math.floor(s / 60) % 60)}:${p(s % 60)}`;
+}
+
+function renderRecording() {
+  for (const [name, t] of tiles) t.el.classList.toggle('rec', S.recordings.has(name));
+  const since = S.full ? S.recordings.get(S.full) : undefined;
+  const btn = $('#vRec');
+  btn.classList.toggle('rec', since !== undefined);
+  setIcon(btn, since !== undefined ? 'stop' : 'rec');
+  btn.title = since !== undefined ? 'Stop recording' : 'Record on this Mac';
+  const pill = $('#vRecPill');
+  pill.hidden = since === undefined;
+  if (since !== undefined) pill.textContent = `REC ${fmtElapsed(Date.now() - since)}`;
+}
+setInterval(() => { if (S.full && S.recordings.has(S.full)) renderRecording(); }, 1000);
 
 function updateBanner() {
   const b = $('#vBanner');
@@ -810,6 +844,17 @@ $('#vAudio').addEventListener('click', () => {
   else Audio.disable();
   renderViewerHeader();
   syncSubs(true);
+});
+$('#vRec').addEventListener('click', () => {
+  if (!S.full) return;
+  const on = !S.recordings.has(S.full);
+  send({ t: 'record', s: S.full, on });
+  if (on) {
+    const v = S.settings;
+    const mic = !v.recordMic ? 'no audio' : v.recordMic === 'ndi' ? 'NDI audio' : v.recordMic === 'default' ? 'default mic'
+      : (S.mics.find(m => m.id === v.recordMic) || { name: 'mic' }).name;
+    toast(`Recording ${v.recordHeight}p · ${(v.recordBitrateKbps / 1000).toFixed(1)} Mb/s · ${mic}`);
+  }
 });
 $('#vStatsBtn').addEventListener('click', () => { S.statsOn = !S.statsOn; renderViewerHeader(); });
 $('#vDetach').addEventListener('click', () => {
@@ -1000,7 +1045,7 @@ function openSheet(id, title, body, foot) {
 }
 function closeSheet() {
   $('#sheet').hidden = true; $('#scrim').hidden = true;
-  const cb = S.sheetResolve; S.sheetResolve = null; S.sheet = null;
+  const cb = S.sheetResolve; S.sheetResolve = null; S.sheet = null; S.refreshMics = null;
   if (cb) cb(null);
 }
 $('#scrim').addEventListener('click', closeSheet);
@@ -1108,6 +1153,25 @@ $('#settingsBtn').addEventListener('click', () => {
   const ips = el('textarea', { class: 'input', placeholder: '192.168.10.20, 10.0.5.0' });
   ips.value = v.extraIPs || '';
   ips.addEventListener('change', () => { v.extraIPs = ips.value; });
+  const RES = [[480, '480p SD'], [720, '720p HD'], [1080, '1080p FHD'], [1440, '1440p QHD'], [2160, '2160p 4K']];
+  const resSel = el('select', { class: 'input' }, ...RES.map(([h, label]) => el('option', { value: h, text: label, selected: v.recordHeight === h })));
+  if (!RES.some(([h]) => h === v.recordHeight)) resSel.append(el('option', { value: v.recordHeight, text: `${v.recordHeight}p`, selected: true }));
+  resSel.addEventListener('change', () => { v.recordHeight = +resSel.value; });
+  const micSel = el('select', { class: 'input' });
+  const fillMics = () => {
+    micSel.replaceChildren(
+      el('option', { value: '', text: 'No audio', selected: !v.recordMic }),
+      el('option', { value: 'ndi', text: 'NDI source audio', selected: v.recordMic === 'ndi' }),
+      el('option', { value: 'default', text: 'System default microphone', selected: v.recordMic === 'default' }),
+      ...S.mics.map(m => el('option', { value: m.id, text: m.name, selected: v.recordMic === m.id })));
+    if (v.recordMic && v.recordMic !== 'default' && v.recordMic !== 'ndi' && !S.mics.some(m => m.id === v.recordMic)) {
+      micSel.append(el('option', { value: v.recordMic, text: 'Saved microphone (not connected)', selected: true }));
+    }
+  };
+  fillMics();
+  S.refreshMics = fillMics;
+  send({ t: 'listMics' });
+  micSel.addEventListener('change', () => { v.recordMic = micSel.value; });
   const sizeSel = el('select', { class: 'input' }, ...['small', 'medium', 'large'].map(s => el('option', { value: s, text: s[0].toUpperCase() + s.slice(1), selected: v.popoverSize === s })));
   sizeSel.addEventListener('change', () => { v.popoverSize = sizeSel.value; });
 
@@ -1125,6 +1189,12 @@ $('#settingsBtn').addEventListener('click', () => {
       range('fullFPS', 'Full view frame rate (web)', 5, 60, 1, x => `${x} fps`),
       range('jpegQuality', 'JPEG quality', 0.3, 0.95, 0.05, x => `${Math.round(x * 100)}%`)),
     el('label', { class: 'field' }, el('span', { text: 'Full view max width' }), widthSel),
+    el('div', { class: 'section-title', text: 'Recording' }),
+    el('div', { class: 'row2' },
+      el('label', { class: 'field' }, el('span', { text: 'Resolution' }), resSel),
+      num('recordBitrateKbps', 'Video bitrate (kb/s)', { min: 500, max: 100000, step: 500 })),
+    el('label', { class: 'field' }, el('span', { text: 'Audio source' }), micSel,
+      el('small', { text: 'H.264 MP4 saved to Movies/NDI-Viewer on this Mac. NDI source audio records the first two channels. Sources smaller than the resolution are not upscaled.' })),
     el('div', { class: 'section-title', text: 'Discovery' }),
     el('label', { class: 'field' }, el('span', { text: 'Extra discovery IPs' }), ips,
       el('small', { text: 'For sources on other subnets. Saved stages add their own source IPs automatically while open.' })),

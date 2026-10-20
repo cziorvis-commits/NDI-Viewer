@@ -16,6 +16,8 @@
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>NDI-Viewer discovers and receives NDI video sources on your network and serves the gallery to phones on the same network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>NDI-Viewer records audio from the microphone you choose in Settings alongside NDI recordings.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_ndi._tcp</string>

@@ -51,6 +51,15 @@ final class ViewerServer {
         NotificationCenter.default.addObserver(forName: .settingsChanged, object: nil, queue: nil) { [weak self] _ in
             self?.queue.async { self?.settingsChanged() }
         }
+        NotificationCenter.default.addObserver(forName: .recordingsChanged, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async { self?.broadcastLocal(self?.recordingsMessage() ?? [:]) }
+        }
+        NotificationCenter.default.addObserver(forName: .recordingFinished, object: nil, queue: nil) { [weak self] n in
+            let text: String
+            if let url = n.object as? URL { text = "Saved recording: \(url.lastPathComponent)" }
+            else { text = "Recording failed: \((n.userInfo?["error"] as? String) ?? "unknown error")" }
+            self?.queue.async { self?.broadcastLocal(["t": "toast", "text": text]) }
+        }
     }
 
     func shutdown() {
@@ -122,11 +131,15 @@ final class ViewerServer {
             "t": "welcome", "id": s.id, "local": s.isLocal, "port": port,
             "urls": lanURLs, "ndi": NDILib.version, "ndiReady": NDILib.isReady,
         ]
-        if s.isLocal { welcome["settings"] = AppSettings.shared.json }
+        if s.isLocal {
+            welcome["settings"] = AppSettings.shared.json
+            welcome["mics"] = RecordingManager.microphones().map(\.json)
+        }
         ws.sendJSON(welcome)
         ws.sendJSON(["t": "sources", "list": finder.sources.map(\.json)])
         ws.sendJSON(profilesMessage())
         if s.isLocal, let lastScan { ws.sendJSON(lastScan) }
+        if s.isLocal { ws.sendJSON(recordingsMessage()) }
         updatePresence()
     }
 
@@ -236,6 +249,13 @@ final class ViewerServer {
 
         case "cancelScan" where s.isLocal:
             scanner?.cancel()
+
+        case "record" where s.isLocal:
+            guard let src = m["s"] as? String else { break }
+            if (m["on"] as? Bool) ?? true { RecordingManager.shared.start(src) } else { RecordingManager.shared.stop(src) }
+
+        case "listMics" where s.isLocal:
+            s.ws.sendJSON(["t": "mics", "list": RecordingManager.microphones().map(\.json)])
 
         default:
             break
@@ -397,6 +417,14 @@ final class ViewerServer {
     private func broadcastProfiles() {
         let msg = profilesMessage()
         for s in sessions.values { s.ws.sendJSON(msg) }
+    }
+
+    private func recordingsMessage() -> [String: Any] {
+        ["t": "recordings", "list": RecordingManager.shared.json]
+    }
+
+    private func broadcastLocal(_ msg: [String: Any]) {
+        for s in sessions.values where s.isLocal { s.ws.sendJSON(msg) }
     }
 
     private func markViewersDirty() { viewersDirty = true }
